@@ -49,6 +49,20 @@ Environment="QEMU_EXTRA_ARGS=
 {{- " " }}-S
 {%- endif -%}
 "
+{# Override the base registration with one that carries vSockCid.
+   See docs/design-decisions.md "machined registration". #}
+{% if vsock_cid is defined %}
+{% if service_scope | default("user") == "user" %}
+{% set varlink_socket = "/run/user/%U/systemd/machine/io.systemd.Machine" %}
+{% else %}
+{% set varlink_socket = "/run/systemd/machine/io.systemd.Machine" %}
+{% endif %}
+ExecStartPost=
+ExecStartPost=-varlinkctl call \
+    {{ varlink_socket }} \
+    io.systemd.Machine.Register \
+    "{\"name\":\"%i\",\"class\":\"vm\",\"service\":\"qemu-system\",\"leader\":${MAINPID},\"vSockCid\":{{ vsock_cid }}}"
+{% endif %}
 {# Empty ExecStop= clears base, then SSH (clean) + QMP (fallback) #}
 {% if ssh_private_key is defined %}
 ExecStop=

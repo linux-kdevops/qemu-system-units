@@ -31,10 +31,21 @@ Environment=QEMU_EXTRA_ARGS=
 ExecStart={{ qemu_binary }} $QEMU_ARGS $QEMU_EXTRA_ARGS \
     $KERNEL_ARGS \
     -qmp unix:%t/qemu-system/%i/qmp.sock,server=on,wait=off
-ExecStartPost=-busctl{% if service_scope | default("user") == "user" %} --user{% endif %} call \
-    org.freedesktop.machine1 /org/freedesktop/machine1 \
-    org.freedesktop.machine1.Manager RegisterMachine \
-    "sayssus" "%i" 0 "qemu-system" "vm" $MAINPID ""
+{# Register with machined over Varlink. See docs/design-decisions.md
+   "machined registration" for why Varlink (and not busctl). The
+   shared template registers without vSockCid because it does not
+   know per-VM values; the per-VM drop-in in
+   templates/qemu-system-override.conf.j2 overrides this when
+   vsock_cid is set in the vars file. #}
+{% if service_scope | default("user") == "user" %}
+{% set varlink_socket = "/run/user/%U/systemd/machine/io.systemd.Machine" %}
+{% else %}
+{% set varlink_socket = "/run/systemd/machine/io.systemd.Machine" %}
+{% endif %}
+ExecStartPost=-varlinkctl call \
+    {{ varlink_socket }} \
+    io.systemd.Machine.Register \
+    "{\"name\":\"%i\",\"class\":\"vm\",\"service\":\"qemu-system\",\"leader\":${MAINPID}}"
 ExecStop=-socat OPEN:%E/systemd/qemu-system/qmp-powerdown!!OPEN:/dev/null,wronly UNIX-CONNECT:%t/qemu-system/%i/qmp.sock
 KillSignal=SIGCONT
 KillMode=mixed
