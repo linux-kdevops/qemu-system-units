@@ -118,6 +118,69 @@ call `sd_notify(READY=1)` after initialization. A patch adding
 not been merged. When QEMU gains `sd_notify()` support, this should
 change to `notify`. See: `man systemd.service`.
 
+## machined registration
+
+Each VM registers itself with machined at start-up via
+`ExecStartPost=` running
+`varlinkctl call <socket> io.systemd.Machine.Register <json>`.
+Socket path: `/run/user/%U/systemd/machine/io.systemd.Machine`
+(user scope) or `/run/systemd/machine/io.systemd.Machine`
+(system scope). Required JSON fields: `name`, `class=vm`,
+`service=qemu-system`, `leader=${MAINPID}`. Optional:
+`vSockCid` when the vars file sets `vsock_cid`.
+
+Registering `vSockCid` is what makes `ssh machine/<vm>` route
+over AF_VSOCK. The shipped
+`/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` hands the
+`machine/*` pattern to `systemd-ssh-proxy`, which looks the
+machine up over Varlink and reads the registered CID. Without
+it, `systemd-ssh-proxy` exits with "Machine has no AF_VSOCK
+CID assigned" (`src/ssh-generator/ssh-proxy.c`).
+
+### Why two `ExecStartPost=` lines across two templates
+
+The shared `qemu-system@.service.j2` renders once for all
+instances and has no per-VM variables at that render time, so
+its Jinja cannot branch on `vsock_cid`. It emits one
+`ExecStartPost=` that registers without CID - correct for any
+VM, always safe.
+
+The per-VM `qemu-system-override.conf.j2` renders with
+`vsock_cid` in scope. When set, it emits `ExecStartPost=`
+(empty) followed by `ExecStartPost=-varlinkctl ... vSockCid:N`.
+Systemd treats the empty directive as a reset of the
+accumulated list, so the drop-in's call replaces the shared
+template's call rather than running alongside. Net effect:
+every VM makes one registration call, with CID if configured,
+without otherwise. VMs that never set `vsock_cid` hit only the
+shared template's call and behave exactly as before.
+
+### Why Varlink and not `busctl`
+
+The legacy DBus `RegisterMachine` method
+(`src/machine/machined-dbus.c`) has a fixed `sayssus`
+signature with no `vSockCid` field. `RegisterMachineEx`
+accepts `VSockCID` but requires the leader identified by
+`LeaderPIDFD` or `LeaderPID+LeaderPIDFDID`, neither of which
+a shell script can synthesise. Varlink's
+`io.systemd.Machine.Register` leader dispatcher accepts a
+bare integer PID and machined acquires the pidfd daemon-side
+(`json_dispatch_pidref` in
+`src/libsystemd/sd-json/json-util.c`).
+
+### Quoting and expansion
+
+`${MAINPID}` uses the brace form because systemd's exec parser
+expands `${VAR}` (but not `$VAR`) inside escape-quoted
+arguments, letting the JSON body ride as one argv entry
+without a `/bin/sh -c` wrapper. The drop-in inlines
+`{{ vsock_cid }}` at Jinja render time rather than pulling
+`${VSOCK_CID}` from the environment because the value is
+already known per-VM.
+
+The `-` prefix on `ExecStartPost=` keeps the VM running if
+machined is unreachable. Registration is informational.
+
 ## QEMU workarounds
 
 **`KillSignal=`** — Set to `SIGCONT`. QEMU on `SIGTERM` calls
