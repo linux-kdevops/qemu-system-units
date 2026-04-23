@@ -10,9 +10,16 @@ that spans multiple flags, a descriptive name is used (e.g.
 `ssh_port`, `pci_passthrough`). See [design-decisions.md](design-decisions.md) for
 naming rationale.
 
-Relative paths resolve against `WorkingDirectory=`, which defaults to
-`$HOME` for user services and `/` for system services
-(systemd.exec(5)).
+Relative paths resolve against `WorkingDirectory=`. The template sets
+`WorkingDirectory=%S/qemu-system/%i`, which resolves to
+`$XDG_STATE_HOME/qemu-system/<vm>` for user services and
+`/var/lib/qemu-system/<vm>` for system services. That directory is
+auto-created and owned by the service via `StateDirectory=qemu-system/%i`,
+so per-VM state files like NVMe qcow2 images can be referenced with
+bare filenames in vars (for example `image: disk.qcow2`) and land in a
+predictable, per-unit location. See [exec directories](#exec-directories)
+below for when to pick `StateDirectory=` vs the five sibling directives,
+and for override semantics.
 
 ## VM identity
 
@@ -379,3 +386,107 @@ System scope only (not delegated to user services): `IOWeight=`,
 
 See: `man systemd.resource-control`, `man systemd.exec`,
 `man systemd.kill`.
+
+## Exec directories
+
+systemd provides six directives that each address a specific lifecycle
+for per-unit file storage. The template hardcodes four of them so every
+VM gets a consistent filesystem layout out of the box. Pick the right
+one when you need to extend the layout; don't reuse `WorkingDirectory=`
+as a catch-all storage knob.
+
+| Directive | Purpose | User root | System root | Lifetime | Auto-created | Cleaned on stop |
+|---|---|---|---|---|---|---|
+| `ConfigurationDirectory=` | read-only unit configuration (env files, helper scripts) | `$XDG_CONFIG_HOME` (`~/.config`) | `/etc` | forever | yes | no |
+| `RuntimeDirectory=` | ephemeral runtime state (sockets, PID files, IPC) | `$XDG_RUNTIME_DIR` (`/run/user/<uid>`) | `/run` | unit runtime only | yes | **yes** (unless `RuntimeDirectoryPreserve=`) |
+| `StateDirectory=` | persistent per-unit state that must survive restart | `$XDG_STATE_HOME` (`~/.local/state`) | `/var/lib` | forever | yes | no |
+| `CacheDirectory=` | regeneratable data; safe to delete | `$XDG_CACHE_HOME` (`~/.cache`) | `/var/cache` | until purge | yes | no |
+| `LogsDirectory=` | log files | `$XDG_STATE_HOME/log` | `/var/log` | forever | yes | no |
+| `WorkingDirectory=` | CWD for the process | n/a (scalar path) | n/a (scalar path) | n/a | **no** — does not create | n/a |
+
+The template sets four of these:
+
+```
+ConfigurationDirectory=systemd/qemu-system
+RuntimeDirectory=qemu-system/%i
+StateDirectory=qemu-system/%i
+WorkingDirectory=%S/qemu-system/%i
+```
+
+`%S` resolves to the same root that `StateDirectory=` uses (systemd
+`unit-printf.c:117-121` + `manager.c:717,725`). `WorkingDirectory=` on
+its own does not create or own a directory — coupling it with
+`StateDirectory=` is what gives you a predictable per-VM CWD that
+auto-exists.
+
+### Mapping file kinds to directives
+
+**QEMU per-VM state (NVMe qcow2 images, seed ISOs, cloud-init data)** —
+`StateDirectory=`. These must survive a service stop and restart; they
+encode the guest's own filesystem state. Reference them by bare filename
+in vars (`file: nvme0.qcow2`, `file: seed.iso`) and the relative path
+resolves against `WorkingDirectory=%S/qemu-system/%i`.
+
+**QEMU runtime sockets (qmp.sock, console.sock, gdb.sock)** —
+`RuntimeDirectory=`. These are unix sockets the supervisor opens for
+the VM's lifetime and that should disappear when the service stops.
+The template already wires them with `%t/qemu-system/%i/...` which is
+the `RuntimeDirectory` root.
+
+**Unit configuration files (per-VM env file, QMP helper script)** —
+`ConfigurationDirectory=`. The per-VM env file lives at
+`%E/systemd/qemu-system/%i.env` and must be present before `ExecStart=`
+runs. Consumers that render these — from a flake, a script, or by
+hand — place them under `$XDG_CONFIG_HOME/systemd/qemu-system/` for
+user services.
+
+**Disk image caches (intermediate images, overlay images that can be
+re-exported)** — `CacheDirectory=`. If the workflow can recreate the
+image from a source tree or build artefact, cache-class storage is
+correct: a machine-wide cache purge won't lose unique state.
+
+**VM console and test logs that outlive the service** —
+`LogsDirectory=`. Typically systemd already journals service stdout;
+use `LogsDirectory=` only for artefacts you want persisted alongside
+other `/var/log/` entries (e.g. timestamped test output captured by a
+harness running inside the VM).
+
+**Just changing CWD without any lifecycle management** —
+`WorkingDirectory=` on its own. Rarely correct — if you care about the
+directory existing, chown, or survival, you want one of the five above
+pointing at it first.
+
+### Overriding via the `service` dict
+
+`WorkingDirectory=` is a scalar directive: setting
+`service: { WorkingDirectory: /some/other/path }` in a vars file
+produces an override drop-in that cleanly replaces the default. For
+relative paths in vars to keep working you need the override target
+to exist and be writable by the service user.
+
+`StateDirectory=`, `RuntimeDirectory=`, `CacheDirectory=`,
+`LogsDirectory=`, `ConfigurationDirectory=` are list-type directives
+(`systemd.exec(5)` "whitespace-separated list of directory names").
+A drop-in that sets a new value **appends** to the template default.
+To replace, first reset with an empty assignment. Via the `service`
+dict you cannot express the two-line reset+set with a single yaml
+key; drop to writing a drop-in by hand for that case:
+
+```
+[Service]
+StateDirectory=
+StateDirectory=myconvention/%i
+```
+
+(Reset semantics are in systemd `load-fragment.c:4475-4478`:
+`isempty(rvalue)` triggers `exec_directory_done(ed)`.)
+
+### Specifiers used here
+
+- `%i` — instance name, the part after `@` in the unit
+  (`qemu-system@<vm>.service` → `<vm>`).
+- `%E` — configuration directory root (`$XDG_CONFIG_HOME` or `/etc`).
+- `%S` — state directory root (`$XDG_STATE_HOME` or `/var/lib`).
+- `%t` — runtime directory root (`$XDG_RUNTIME_DIR` or `/run`).
+
+`systemd.unit(5)` SPECIFIERS table has the full list.
