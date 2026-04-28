@@ -199,7 +199,31 @@ journalctl --user-unit=qemu-system@test.service --follow
 
 # All VM-related units since last boot
 journalctl --user-unit='qemu-system@*' --user-unit='virtiofsd@*' --boot
+
+# Follow every VM with a compact line prefix
+journalctl --user-unit='qemu-system@*.service' --no-hostname --follow
+
+# Follow every VM with the full unit path (debugging dependencies)
+journalctl --user-unit='qemu-system@*.service' --output=with-unit --follow
 ```
+
+The default `short` output prefixes each line with the syslog
+identifier. The `qemu-system@.service` template sets
+`SyslogIdentifier=qemu-system@%i`, so the prefix carries both the
+service template and the instance name
+(`qemu-system@<vm>[PID]:`) without any extra journalctl flag.
+Pair with `--no-hostname` for the most compact form. Manager
+messages (`systemd[PID]:`) are emitted by systemd itself and keep
+their default prefix. See `design-decisions.md` for why this
+template overrides `SyslogIdentifier=` while
+`systemd-vmspawn@.service` and `systemd-nspawn@.service` do not.
+
+`--output=with-unit` adds the user manager unit and the full
+`.service` suffix (`user@UID.service/qemu-system@<vm>.service[PID]:`),
+useful when debugging dependency or scope issues but verbose for
+day-to-day tailing. `--output=cat` strips the prefix entirely for
+piping. `--output=json` emits one JSON record per line for machine
+parsing. See: `man journalctl`.
 
 ## Stop
 
