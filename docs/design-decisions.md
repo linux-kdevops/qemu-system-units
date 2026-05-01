@@ -363,6 +363,57 @@ virtiofsd survives QEMU and keeps stale share-directory bindings alive,
 requiring an explicit `systemctl stop` of each per-share service to
 force re-binding on the next QEMU connection. See: `man systemd.unit`.
 
+## Restart cycle vs `BindsTo=` race
+
+Reload the unit definition with stop, mutate, `daemon-reload`, start.
+Never `systemctl restart` the VM service when the per-VM drop-in or
+`vm.env` was just re-rendered. The reason is a race in
+`JOB_RESTART`'s interaction with `BindsTo=virtiofsd@%i-<tag>.service`
+that does not exist for plain `JOB_START`.
+
+A `systemctl start` builds a transaction. The transaction walks
+`UNIT_ATOM_PULL_IN_START` dependencies of the VM service
+(`src/core/transaction.c:1055`) and queues `JOB_START` on each. The
+atom mapping `[UNIT_BINDS_TO] = UNIT_ATOM_PULL_IN_START | ...`
+(`src/core/unit-dependency-atom.c:31`) means every
+`BindsTo=virtiofsd@%i-<tag>.service` line in the per-VM drop-in is
+pulled in. If those services were inactive at construction time, an
+actual `JOB_START` job sticks on each. While the VM transitions to
+`UNIT_ACTIVE`, `unit_submit_to_stop_when_bound_queue()`
+(`src/core/unit.c:2871`) fires, and the queue handler walks the
+`BindsTo=` deps via `unit_is_bound_by_inactive()`
+(`src/core/unit.c:2233`); any dep with `other->job != NULL` is
+skipped, so the death-link does not trigger.
+
+A `systemctl restart` is different in exactly one place. Per
+`src/core/job.c:204`, `JOB_RESTART` is `JOB_STOP` followed by an
+in-place change to `JOB_START` (`job_change_type(j, JOB_START)` at
+`src/core/job.c:1027`). The change happens after the stop phase
+finishes; transaction construction is **not** re-run. So the
+`UNIT_ATOM_PULL_IN_START` walk only happens once, at the original
+restart's transaction-construction time, when virtiofsd@ services
+were `ACTIVE` because the prior VM was running. `JOB_START`
+on an already-active dep is a no-op, no job sticks. During the stop
+phase, QEMU's exit drops every vhost-user socket, virtiofsd self-
+exits ("Client disconnected, shutting down"), and the
+`virtiofsd@<vm>-<tag>.service` units transition to `inactive` with
+no job pending. The patched-in `JOB_START` on the VM then runs.
+When the VM reaches `UNIT_ACTIVE`, the death-link evaluator finds
+`BindsTo=` deps in `(inactive, no job)` state and queues `JOB_STOP`
+on the VM. The VM is killed two minutes later via
+`TimeoutStopSec=`, mid-workload.
+
+Splitting the cycle into `systemctl stop` and a separate
+`systemctl start` makes each side a fresh transaction. The start-
+side transaction sees virtiofsd@ services in `inactive` state, queues
+`JOB_START` on each via `UNIT_ATOM_PULL_IN_START`, and the death-
+link evaluator skips them. This is the canonical systemd shape for
+"swap a unit definition and restart": stop, mutate, `daemon-reload`,
+start. Anything tighter than that races. See:
+`playbooks/roles/qemu_system_units/tasks/start_vms.yml`,
+`man systemd.unit` (`BindsTo=`),
+`man systemctl` (`restart`).
+
 ## Cloud-init
 
 ### Network configuration gap

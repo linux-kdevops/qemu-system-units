@@ -342,6 +342,38 @@ systemctl --user daemon-reload
 systemctl --user restart 'virtiofsd@*.socket'
 ```
 
+### Updating a VM's unit definition
+
+When `vm.env` or the per-VM drop-in
+(`qemu-system@<vm>.service.d/override.conf`) changes -- new
+kernel path, NVMe knobs, share list, anything -- reload the
+definition with stop, mutate, `daemon-reload`, start. **Do not**
+`systemctl restart` the VM service.
+
+```shell
+systemctl --user stop qemu-system@test
+# re-render override.conf and vm.env at this point
+systemctl --user daemon-reload
+systemctl --user start qemu-system@test
+```
+
+`systemctl restart` is `JOB_RESTART`, which patches itself
+in place after the stop phase and never re-runs transaction
+construction. The result is that the per-VM drop-in's
+`BindsTo=virtiofsd@%i-<tag>.service` deps are still considered
+already-resolved from when the OLD VM was running, but the OLD
+QEMU's exit drops the vhost-user sockets and the virtiofsd
+services self-exit, so by the time the patched-in start phase
+runs, those deps are `inactive`. The death-link evaluator on
+`UNIT_ACTIVE` sees them in `(inactive, no job)` state and
+queues `JOB_STOP` on the new VM, which then dies via
+`TimeoutStopSec=` two minutes later, mid-workload. Two
+separate transactions (`stop` + `start`) avoid this entirely:
+the start-side transaction queues `JOB_START` on every
+`BindsTo=` dep, the death-link evaluator skips deps with a
+queued job, no race. See: `docs/design-decisions.md`
+(`Restart cycle vs BindsTo race`).
+
 ## Deploy all
 
 Set `VARS` to your vars file. `VM` is derived from `vm_name`
