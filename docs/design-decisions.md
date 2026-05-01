@@ -151,7 +151,22 @@ Socket path: `/run/user/%U/systemd/machine/io.systemd.Machine`
 (user scope) or `/run/systemd/machine/io.systemd.Machine`
 (system scope). Required JSON fields: `name`, `class=vm`,
 `service=qemu-system`, `leader=${MAINPID}`. Optional:
-`vSockCid` when the vars file sets `vsock_cid`.
+`vSockCid` when the vars file sets `vsock_cid`; `id` when the
+vars file sets `uuid`.
+
+### `id` correlates QEMU's UUID with machined's record
+
+When `uuid` is set in the vars file, the same value is passed to
+QEMU's `-uuid` flag (rendered into vm.env's `QEMU_ARGS`) and to
+the Register call's `id` field
+(`sd_json_dispatch_id128` in `src/machine/machine-varlink.c:133`).
+The host sees it as `Id=` in `machinectl show <vm_name>`; the
+guest sees it as `dmidecode -s system-uuid` and
+`/sys/class/dmi/id/product_uuid`. A single user-supplied UUID
+threads through both sides, so tooling that correlates by
+machine UUID resolves to the same VM regardless of which side
+queries. No auto-derivation: omit `uuid` and QEMU passes its
+default (all-zeros) while the Register call omits `id`.
 
 Registering `vSockCid` is what makes `ssh machine/<vm>` route
 over AF_VSOCK. The shipped

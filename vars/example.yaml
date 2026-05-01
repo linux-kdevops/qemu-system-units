@@ -4,6 +4,7 @@
 
 vm_name: test
 service_scope: user
+# uuid: 00112233-4455-6677-8899-aabbccddeeff
 
 # QEMU
 qemu_binary: /usr/bin/qemu-system-x86_64

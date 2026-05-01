@@ -33,6 +33,17 @@ and unit behavior. User scope deploys to `~/.config/systemd/user/`,
 needs no sudo. System scope deploys to `/etc/systemd/system/`,
 requires root. Default: `user`.
 
+**`uuid`** — RFC 4122 UUID string for the VM. Optional. When set,
+maps to `-uuid` (QEMU SMBIOS / DMI identity, surfaces inside the
+guest as `dmidecode -s system-uuid` and `/sys/class/dmi/id/product_uuid`)
+and to the `id` field of the `io.systemd.Machine.Register` varlink
+call (surfaces on the host as `Id=` in `machinectl show <vm_name>`).
+Pairing the two correlates the same VM across QEMU's identification
+table and machined's record. When omitted, QEMU passes through its
+default (all-zeros UUID) and the Register call omits `id` entirely.
+See: `man qemu-system`, `src/machine/machine-varlink.c` Register
+dispatch table.
+
 ## QEMU
 
 **`qemu_binary`** — Absolute path to the QEMU system emulator

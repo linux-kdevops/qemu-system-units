@@ -61,7 +61,7 @@ ExecStartPost=
 ExecStartPost=-varlinkctl call \
     {{ varlink_socket }} \
     io.systemd.Machine.Register \
-    "{\"name\":\"%i\",\"class\":\"vm\",\"service\":\"qemu-system\",\"leader\":${MAINPID},\"vSockCid\":{{ vsock_cid }}}"
+    "{\"name\":\"%i\",\"class\":\"vm\",\"service\":\"qemu-system\",\"leader\":${MAINPID},\"vSockCid\":{{ vsock_cid }}{% if uuid is defined %},\"id\":\"{{ uuid }}\"{% endif %}}"
 {% endif %}
 {# Empty ExecStop= clears base, then SSH (clean) + QMP (fallback) #}
 {% if ssh_private_key is defined %}
