@@ -16,6 +16,7 @@
 
 [Unit]
 Description=QEMU System Virtual Machine %i
+Documentation=man:qemu-system(1) man:systemd.service(5) man:systemd.kill(5)
 PartOf=machines.target
 Before=machines.target
 {% if service_scope | default('user') == 'system' %}

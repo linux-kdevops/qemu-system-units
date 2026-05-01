@@ -79,6 +79,19 @@ Fully controlled by the user. See [vars.md](vars.md) for reference.
 
 ## systemd service properties
 
+**`Documentation=`** — Set to
+`man:qemu-system(1) man:systemd.service(5) man:systemd.kill(5)`.
+References the upstream man pages relevant to the unit: QEMU's own
+manual for the binary the service launches, systemd.service(5) for
+the unit type and lifecycle directives, systemd.kill(5) for the
+deliberate `KillSignal=SIGCONT` + `KillMode=mixed` choice the unit
+makes. Surfaces in `systemctl status` and `systemctl help` so an
+operator inspecting the unit reaches the canonical references
+without leaving the CLI. Project-specific docs are not referenced
+from the unit; only upstream man pages whose stability is
+guaranteed by their respective maintainers. See:
+`man systemd.unit`.
+
 **`KillMode=`** — Set to `mixed`. Sends `KillSignal=` to the main
 process. After the main process exits or `TimeoutSec=` elapses,
 remaining processes in the cgroup receive `SIGKILL`. For VMs, the
