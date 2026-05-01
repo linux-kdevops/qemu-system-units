@@ -233,6 +233,30 @@ already known per-VM.
 The `-` prefix on `ExecStartPost=` keeps the VM running if
 machined is unreachable. Registration is informational.
 
+### `machinectl list` columns OS, VERSION, ADDRESSES are unsupported for VMs
+
+Both `machine_get_os_release` and `machine_get_addresses` in
+machined return `-EOPNOTSUPP` for `MACHINE_VM`
+(`src/machine/machined-core.c:418` and `:323`). They handle
+`MACHINE_HOST` directly and `MACHINE_CONTAINER` via
+`namespace_fork` into the container's mnt+pid+root or net
+namespace; neither path applies to a VM whose kernel and netstack
+live behind a hypervisor boundary. The varlink protocol exposes
+no per-machine update method either - `Register / List /
+Unregister / Terminate / Kill / Open / OpenRootDirectory /
+MapFrom / MapTo / BindMount / CopyFrom / CopyTo`
+(`src/machine/machined-varlink.c:789-800`) - so a registered VM
+has no way to push os-release or current addresses back to
+machined post-Register. The `ifIndices` field in the Register
+dispatch table (`machine-varlink.c:141`) is captured into the
+`Machine` struct but `machine_get_addresses` for `MACHINE_VM`
+short-circuits with `EOPNOTSUPP` before any per-class logic, so
+it is currently inert.
+
+Operator-side configuration cannot fill those columns. Closing
+the gap requires an upstream patch adding push-style varlink
+methods plus a guest-side notifier service over `AF_VSOCK`.
+
 ## QEMU workarounds
 
 **`KillSignal=`** — Set to `SIGCONT`. QEMU on `SIGTERM` calls
