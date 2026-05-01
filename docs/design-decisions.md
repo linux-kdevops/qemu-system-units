@@ -131,6 +131,23 @@ call `sd_notify(READY=1)` after initialization. A patch adding
 not been merged. When QEMU gains `sd_notify()` support, this should
 change to `notify`. See: `man systemd.service`.
 
+**`Restart=`** — Deliberately unset (systemd default `no`). Auto
+restart on failure interacts badly with the BindsTo cascade
+between `qemu-system@<vm>.service` and the per-share
+`virtiofsd@<vm>-<tag>.service` units: a QEMU exit drops the
+vhost-user sockets, virtiofsd self-exits, and the inactive deps
+trip the death-link in `unit_is_bound_by_inactive`
+(`src/core/unit.c`) the moment systemd tries to start the next
+incarnation, so the auto-restarted VM gets stopped one second
+after start. The same race the `restart_vms.yml` split
+(`stop_vms.yml` -> mutate -> `start_vms.yml`) closes for explicit
+restarts cannot be expressed by `Restart=`, which is a single
+in-place transaction. Operators who actually want auto-restart
+on a kernel-panic-style exit override via `service:
+{ Restart: on-failure }`; with that they accept the race.
+See: `man systemd.service`, `scripts/qemu-system-units/docs/`
+"Restart cycle vs BindsTo race".
+
 **`SyslogIdentifier=`** — Set to `qemu-system@%i`. Default journal
 output (`journalctl --output=short`) prefixes each line with the
 syslog identifier, which falls back to the executed process name
