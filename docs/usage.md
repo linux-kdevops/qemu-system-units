@@ -67,7 +67,21 @@ minijinja-cli --trim-blocks \
   --output ~/.config/systemd/virtiofsd/test-modules.env \
   templates/virtiofsd.env.j2 \
   vars/test.yaml
+
+# Per-instance stop-ordering drop-in (one per (vm, share) tuple)
+mkdir --mode=0755 --parents ~/.config/systemd/user/virtiofsd@test-modules.service.d
+minijinja-cli --trim-blocks \
+  --output ~/.config/systemd/user/virtiofsd@test-modules.service.d/override.conf \
+  templates/virtiofsd-override.conf.j2 \
+  vars/test.yaml
 ```
+
+The per-instance drop-in adds `Before=qemu-system@<vm>.service` so
+virtiofsd outlives qemu's `ExecStop=` graceful shutdown. Without it
+the `BindsTo=virtiofsd@%i-<tag>.service` cascade in the qemu drop-in
+tears virtiofsd down concurrently with `ExecStop=`, the guest hangs
+on missing virtiofs responses, and qemu hits `TimeoutSec=` -> `SIGKILL`.
+See: design-decisions.md "virtiofsd" section.
 
 ## vfio
 
@@ -250,8 +264,9 @@ systemctl --user reset-failed qemu-system@test
 ## Multiple VMs
 
 The `qemu-system@.service` template supports multiple instances.
-Each VM gets its own vars file, env file, and drop-in. The service
-template and virtiofsd units are shared.
+Each VM gets its own vars file, env file, qemu-system drop-in, and
+one virtiofsd drop-in per share for stop ordering. The service
+templates and the virtiofsd socket template are shared.
 
 `vm_name`, `ssh_port`, and `vsock_cid` must be unique per VM.
 
@@ -301,6 +316,7 @@ and virtiofsd units stay for other VMs.
 systemctl --user stop qemu-system@test
 rm ~/.config/systemd/qemu-system/test.env
 rm --recursive --force ~/.config/systemd/user/qemu-system@test.service.d
+rm --recursive --force ~/.config/systemd/user/virtiofsd@test-*.service.d
 rm --recursive --force ~/.config/systemd/virtiofsd/test-*.env
 systemctl --user daemon-reload
 ```
@@ -323,6 +339,7 @@ rm --recursive --force \
   ~/.config/systemd/user/qemu-system@*.service.d \
   ~/.config/systemd/user/virtiofsd@.socket \
   ~/.config/systemd/user/virtiofsd@.service \
+  ~/.config/systemd/user/virtiofsd@*.service.d \
   ~/.config/systemd/user/vfio-bind@.service \
   ~/.config/systemd/qemu-system \
   ~/.config/systemd/virtiofsd

@@ -432,6 +432,32 @@ virtiofsd survives QEMU and keeps stale share-directory bindings alive,
 requiring an explicit `systemctl stop` of each per-share service to
 force re-binding on the next QEMU connection. See: `man systemd.unit`.
 
+**`Before=qemu-system@<vm>.service`** — Set on every per-instance
+`virtiofsd@<vm>-<share>.service.d/override.conf` rendered from
+`templates/virtiofsd-override.conf.j2`. Inverts the stop ordering
+of the `BindsTo=virtiofsd@%i-<tag>.service` cascade emitted by the
+per-VM `qemu-system-override.conf`. Without it, the stop
+transaction `systemctl --user stop qemu-system@<vm>` enqueues both
+qemu's stop and virtiofsd's `BoundBy=`-cascaded stop and runs them
+in parallel: qemu's `ExecStop=ssh root@vsock/<cid> systemctl
+poweroff` triggers a guest shutdown, but virtiofsd has already
+torn down its vhost-user socket. The guest kernel logs
+`virtio-fs: response too short (0)` on every outstanding fs
+request, the unmount step in the guest's shutdown sequence hangs
+in D-state on `/nix/store`, `/lib/modules`, and the data shares,
+ACPI powerdown is never delivered, and qemu hits
+`TimeoutSec=2min` followed by `SIGKILL`. Adding `Before=qemu` on
+the virtiofsd side reverses to `After=virtiofsd` in the stop
+direction (`man systemd.unit`: *"the inverse of the start-up order
+is applied"*). The cascade still queues virtiofsd's stop in the
+same transaction (`UNIT_ATOM_PROPAGATE_STOP`,
+`src/core/unit-dependency-atom.c:60`), so failure-time
+propagation is preserved; the ordering only changes when the
+queued stop runs. Socket activation is unaffected because
+`Before=` orders but does not pull starts; virtiofsd@.service
+still starts only when qemu connects to its socket.
+See: `man systemd.unit`.
+
 ## Restart cycle vs `BindsTo=` race
 
 Reload the unit definition with stop, mutate, `daemon-reload`, start.

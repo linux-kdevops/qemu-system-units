@@ -45,6 +45,10 @@ mkdir --mode=0755 --parents ~/.config/systemd/user/qemu-system@test.service.d
 minijinja-cli --trim-blocks \
   --output ~/.config/systemd/user/qemu-system@test.service.d/override.conf \
   templates/qemu-system-override.conf.j2 vars/test.yaml
+mkdir --mode=0755 --parents ~/.config/systemd/user/virtiofsd@test-modules.service.d
+minijinja-cli --trim-blocks \
+  --output ~/.config/systemd/user/virtiofsd@test-modules.service.d/override.conf \
+  templates/virtiofsd-override.conf.j2 vars/test.yaml
 minijinja-cli --trim-blocks \
   --output ~/.config/systemd/qemu-system/test.env \
   templates/vm.env.j2 vars/test.yaml

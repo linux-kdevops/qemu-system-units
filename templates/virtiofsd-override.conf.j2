@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: copyleft-next-0.3.1
+#
+# Per-instance drop-in for virtiofsd@<vm>-<share>.service
+# Rendered from: templates/virtiofsd-override.conf.j2
+#
+# Deploy one drop-in per (vm, share) tuple:
+#   mkdir --parents ~/.config/systemd/user/virtiofsd@{{ vm_name }}-<share>.service.d
+#   cp <rendered> ~/.config/systemd/user/virtiofsd@{{ vm_name }}-<share>.service.d/override.conf
+#
+# Adds `Before=qemu-system@<vm>.service` so virtiofsd outlives
+# qemu's `ExecStop=` graceful shutdown. The per-VM
+# `qemu-system-override.conf` already emits
+# `BindsTo=virtiofsd@%i-<tag>.service` for every share. Without
+# stop ordering, that `BindsTo=` cascade fires the virtiofsd stop
+# concurrently with `ExecStop=ssh root@vsock/<cid> systemctl
+# poweroff`. The guest's unmount of `/nix/store`, `/lib/modules`,
+# and any virtiofs share starts seeing `virtio-fs: response too
+# short` errors as virtiofsd's vhost-user socket disappears
+# mid-request. The guest hangs on filesystem IO that will never
+# complete, ACPI shutdown is never delivered, and qemu reaches
+# `TimeoutSec=2min` followed by `SIGKILL`.
+#
+# `Before=qemu-system@<vm>.service` does not pull qemu in; it only
+# orders. Stop direction is the inverse of start direction
+# (`man systemd.unit`), so `Before=qemu` here means virtiofsd
+# stops AFTER qemu in the stop transaction. The existing `BindsTo=`
+# cascade still queues virtiofsd's stop in the same transaction;
+# the new ordering just runs it after qemu has fully exited rather
+# than concurrently with its `ExecStop=`. virtiofsd@.service then
+# stops via the queued job plus `StopWhenUnneeded=yes`, the
+# listening socket stops next, and the guest's clean unmount
+# completes inside that window.
+#
+# Socket activation is unaffected: `Before=` only orders, it does
+# not start. The transaction that starts qemu does not pull
+# virtiofsd@.service into a `JOB_START`; that service still starts
+# via socket activation when qemu connects to
+# virtiofsd@%i-<tag>.socket.
+
+[Unit]
+Before=qemu-system@{{ vm_name }}.service
