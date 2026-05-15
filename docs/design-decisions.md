@@ -95,10 +95,11 @@ guaranteed by their respective maintainers. See:
 **`KillMode=`** — Set to `mixed`. Sends `KillSignal=` to the main
 process. After the main process exits or `TimeoutStopSec=` elapses,
 remaining processes in the cgroup receive `SIGKILL`. For VMs, the
-main process is QEMU. After `ExecStop=` runs QMP graceful shutdown,
-if QEMU exits cleanly, any leaked child processes are killed
-immediately. The alternative `control-group` would send `KillSignal=`
-to all processes simultaneously, which is unnecessary when only QEMU
+main process is the QEMU process. After `ExecStop=` runs QMP
+graceful shutdown, if the QEMU process exits cleanly, any leaked
+child processes are killed immediately. The alternative
+`control-group` would send `KillSignal=` to all processes
+simultaneously, which is unnecessary when only the QEMU process
 needs the signal. See: `man systemd.kill`.
 
 **`TimeoutStopSec=`** — Set to `2min`. Grace period for `ExecStop=`
@@ -131,22 +132,16 @@ call `sd_notify(READY=1)` after initialization. A patch adding
 not been merged. When QEMU gains `sd_notify()` support, this should
 change to `notify`. See: `man systemd.service`.
 
-**`Restart=`** — Deliberately unset (systemd default `no`). Auto
-restart on failure interacts badly with the BindsTo cascade
-between `qemu-system@<vm>.service` and the per-share
-`virtiofsd@<vm>-<tag>.service` units: a QEMU exit drops the
-vhost-user sockets, virtiofsd self-exits, and the inactive deps
-trip the death-link in `unit_is_bound_by_inactive`
-(`src/core/unit.c`) the moment systemd tries to start the next
-incarnation, so the auto-restarted VM gets stopped one second
-after start. The same race the `restart_vms.yml` split
-(`stop_vms.yml` -> mutate -> `start_vms.yml`) closes for explicit
-restarts cannot be expressed by `Restart=`, which is a single
-in-place transaction. Operators who actually want auto-restart
-on a kernel-panic-style exit override via `service:
-{ Restart: on-failure }`; with that they accept the race.
-See: `man systemd.service`, `scripts/qemu-system-units/docs/`
-"Restart cycle vs BindsTo race".
+**`Restart=`** — Deliberately unset (systemd default `no`). A
+restart policy is a deployment choice the templates do not impose:
+`Restart=always` would revive a VM an operator powered off on
+purpose, and auto-restart on failure is only sometimes wanted. An
+operator who wants auto-restart on a kernel-panic-style exit sets
+`service: { Restart: on-failure }`; the per-VM drop-in pins
+virtiofsd with `Requires=` (see "virtiofsd dependency" below),
+which carries `UNIT_ATOM_PULL_IN_START`
+(`src/core/unit-dependency-atom.c:17`) and so pulls a fresh
+virtiofsd in when the service restarts. See: `man systemd.service`.
 
 **`SyslogIdentifier=`** — Set to `qemu-system@%i`. Default journal
 output (`journalctl --output=short`) prefixes each line with the
@@ -333,7 +328,7 @@ methods plus a guest-side notifier service over `AF_VSOCK`.
 **`KillSignal=`** — Set to `SIGCONT`. QEMU on `SIGTERM` calls
 `qemu_system_killed()` which sets `force_shutdown=true` and exits
 immediately without ACPI powerdown. `SIGCONT` is a no-op signal that
-keeps QEMU alive, giving `ExecStop=` time to send QMP
+keeps the QEMU process alive, giving `ExecStop=` time to send QMP
 system_powerdown for proper ACPI shutdown. After `TimeoutStopSec=`,
 systemd sends `SIGKILL` (via `KillMode=mixed`). Not
 user-configurable. See: `man systemd.kill`.
@@ -468,17 +463,18 @@ as FD 3 per the `sd_listen_fds` protocol. Not user-configurable.
 See: `man sd_listen_fds`.
 
 **`StopWhenUnneeded=yes`** — Set on `virtiofsd@.service`. Makes the
-service auto-stop when no QEMU instance pins it. The per-VM drop-in
-(`templates/qemu-system-override.conf.j2`) emits
-`BindsTo=virtiofsd@%i-<tag>.service` for every share, which creates an
-implicit reverse `BoundBy=` dependency on the virtiofsd unit. `BoundBy`
-carries the `UNIT_ATOM_PINS_STOP_WHEN_UNNEEDED` atom
-(`src/core/unit-dependency-atom.c:60`); the moment all pinning
+service auto-stop when no `qemu-system@<vm>.service` pins it. The
+per-VM drop-in (`templates/qemu-system-override.conf.j2`) emits
+`Requires=virtiofsd@%i-<tag>.service` for every share, which creates an
+implicit reverse `RequiredBy=` dependency on the virtiofsd unit.
+`RequiredBy` carries the `UNIT_ATOM_PINS_STOP_WHEN_UNNEEDED` atom
+(`src/core/unit-dependency-atom.c:45`); the moment all pinning
 dependencies go inactive, `unit_is_unneeded()`
 (`src/core/unit.c:2179-2207`) returns true and systemd queues the
-service for stop. The listening socket is not pinned by QEMU's
-`BindsTo=`, so it stays active across stop/start cycles and
-re-activates virtiofsd on the next QEMU connection. The stop side is
+service for stop. The listening socket is not pinned by
+`qemu-system@<vm>.service`'s `Requires=`, so it stays active across
+stop/start cycles and re-activates virtiofsd on the next connection
+from the QEMU process. The stop side is
 symmetric with the start side: socket activation handles start,
 `StopWhenUnneeded=` handles stop, with no explicit lifecycle plumbing
 between QEMU and virtiofsd in either direction. Without this directive,
@@ -489,79 +485,100 @@ force re-binding on the next QEMU connection. See: `man systemd.unit`.
 **`Before=qemu-system@<vm>.service`** — Set on every per-instance
 `virtiofsd@<vm>-<share>.service.d/override.conf` rendered from
 `templates/virtiofsd-override.conf.j2`. Inverts the stop ordering
-of the `BindsTo=virtiofsd@%i-<tag>.service` cascade emitted by the
+of the `Requires=virtiofsd@%i-<tag>.service` cascade emitted by the
 per-VM `qemu-system-override.conf`. Without it, the stop
 transaction `systemctl --user stop qemu-system@<vm>` enqueues both
-qemu's stop and virtiofsd's `BoundBy=`-cascaded stop and runs them
-in parallel: qemu's `ExecStop=ssh root@vsock/<cid> systemctl
+`qemu-system@<vm>.service`'s stop and virtiofsd's
+`RequiredBy=`-cascaded stop and runs them in parallel:
+`qemu-system@<vm>.service`'s `ExecStop=ssh root@vsock/<cid> systemctl
 poweroff` triggers a guest shutdown, but virtiofsd has already
 torn down its vhost-user socket. The guest kernel logs
 `virtio-fs: response too short (0)` on every outstanding fs
 request, the unmount step in the guest's shutdown sequence hangs
 in D-state on `/nix/store`, `/lib/modules`, and the data shares,
-ACPI powerdown is never delivered, and qemu hits
-`TimeoutSec=2min` followed by `SIGKILL`. Adding `Before=qemu` on
-the virtiofsd side reverses to `After=virtiofsd` in the stop
-direction (`man systemd.unit`: *"the inverse of the start-up order
-is applied"*). The cascade still queues virtiofsd's stop in the
+ACPI powerdown is never delivered, and `qemu-system@<vm>.service`
+hits `TimeoutStopSec=2min`, after which systemd sends `SIGKILL` to
+the QEMU process. Adding `Before=qemu-system@<vm>.service` on the
+virtiofsd side reverses to `After=virtiofsd@<vm>-<share>.service` in
+the stop direction (`man systemd.unit`: *"the inverse of the
+start-up order is applied"*). The cascade still queues virtiofsd's stop in the
 same transaction (`UNIT_ATOM_PROPAGATE_STOP`,
-`src/core/unit-dependency-atom.c:60`), so failure-time
+`src/core/unit-dependency-atom.c:43`), so failure-time
 propagation is preserved; the ordering only changes when the
 queued stop runs. Socket activation is unaffected because
 `Before=` orders but does not pull starts; virtiofsd@.service
-still starts only when qemu connects to its socket.
-See: `man systemd.unit`.
+still starts only when the QEMU process connects to its socket.
+See: `man systemd.unit`, `src/core/unit-dependency-atom.c:43`
+(`UNIT_REQUIRED_BY` carries `UNIT_ATOM_PROPAGATE_STOP`).
 
-## Restart cycle vs `BindsTo=` race
+## virtiofsd dependency: `Requires=`, not `BindsTo=`
 
-Reload the unit definition with stop, mutate, `daemon-reload`, start.
-Never `systemctl restart` the VM service when the per-VM drop-in or
-`vm.env` was just re-rendered. The reason is a race in
-`JOB_RESTART`'s interaction with `BindsTo=virtiofsd@%i-<tag>.service`
-that does not exist for plain `JOB_START`.
+The per-VM `qemu-system-override.conf` emits
+`Requires=virtiofsd@%i-<tag>.service` for every share, paired with
+`Requires=virtiofsd@%i-<tag>.socket` + `After=virtiofsd@%i-<tag>
+.socket` for ordering. `BindsTo=` would be the textbook choice for
+"consumer cannot run without producer" and is what
+`systemd-networkd-persistent-storage.service` uses against
+`systemd-networkd.service`, but `BindsTo=` bundles two atoms
+(`unit-dependency-atom.c:31-35`) that we want individually but
+not together: forward `UNIT_ATOM_CANNOT_BE_ACTIVE_WITHOUT` (the
+death-link checked by `unit_is_bound_by_inactive()` at
+`src/core/unit.c:2239`) and reverse `UNIT_ATOM_RETROACTIVE_STOP_ON_STOP`
+(line 57-58, the crash-kill propagation). systemd does not ship a
+primitive that emits the second without the first.
 
-A `systemctl start` builds a transaction. The transaction walks
-`UNIT_ATOM_PULL_IN_START` dependencies of the VM service
-(`src/core/transaction.c:1055`) and queues `JOB_START` on each. The
-atom mapping `[UNIT_BINDS_TO] = UNIT_ATOM_PULL_IN_START | ...`
-(`src/core/unit-dependency-atom.c:31`) means every
-`BindsTo=virtiofsd@%i-<tag>.service` line in the per-VM drop-in is
-pulled in. If those services were inactive at construction time, an
-actual `JOB_START` job sticks on each. While the VM transitions to
-`UNIT_ACTIVE`, `unit_submit_to_stop_when_bound_queue()`
-(`src/core/unit.c:2871`) fires, and the queue handler walks the
-`BindsTo=` deps via `unit_is_bound_by_inactive()`
-(`src/core/unit.c:2233`); any dep with `other->job != NULL` is
-skipped, so the death-link does not trigger.
+The death-link is fatal in our setup because virtiofsd is a
+vhost-user slave and self-exits when the QEMU process disconnects.
+Any stop phase of `qemu-system@<vm>.service`, including the stop
+half of a `JOB_RESTART`, drops virtiofsd to `inactive`. After the
+stop phase, `JOB_RESTART` morphs in place to `JOB_START`
+(`src/core/job.c:1027`) without re-running transaction construction
+(`src/core/transaction.c:1055`), so the `UNIT_ATOM_PULL_IN_START`
+walk that would queue a fresh `JOB_START` on virtiofsd never runs.
+When `qemu-system@<vm>.service` reaches `UNIT_ACTIVE`, the
+death-link evaluator finds virtiofsd in `(inactive, no job)` state
+and queues `JOB_STOP` on it; the VM is killed two minutes later via
+`TimeoutStopSec=2min`, mid-workload.
+This made `systemctl restart qemu-system@<vm>` unusable with
+`BindsTo=`.
 
-A `systemctl restart` is different in exactly one place. Per
-`src/core/job.c:204`, `JOB_RESTART` is `JOB_STOP` followed by an
-in-place change to `JOB_START` (`job_change_type(j, JOB_START)` at
-`src/core/job.c:1027`). The change happens after the stop phase
-finishes; transaction construction is **not** re-run. So the
-`UNIT_ATOM_PULL_IN_START` walk only happens once, at the original
-restart's transaction-construction time, when virtiofsd@ services
-were `ACTIVE` because the prior VM was running. `JOB_START`
-on an already-active dep is a no-op, no job sticks. During the stop
-phase, QEMU's exit drops every vhost-user socket, virtiofsd self-
-exits ("Client disconnected, shutting down"), and the
-`virtiofsd@<vm>-<tag>.service` units transition to `inactive` with
-no job pending. The patched-in `JOB_START` on the VM then runs.
-When the VM reaches `UNIT_ACTIVE`, the death-link evaluator finds
-`BindsTo=` deps in `(inactive, no job)` state and queues `JOB_STOP`
-on the VM. The VM is killed two minutes later via
-`TimeoutStopSec=`, mid-workload.
+`Requires=` drops `CANNOT_BE_ACTIVE_WITHOUT` and keeps everything
+else: pinning via `RequiredBy.PINS_STOP_WHEN_UNNEEDED`
+(`unit-dependency-atom.c:45`), explicit-stop propagation via
+`RequiredBy.PROPAGATE_STOP` (line 43), and clean stop ordering via
+the existing `After=virtiofsd@.socket` plus the per-instance
+`Before=qemu-system@<vm>.service` drop-in
+(`templates/virtiofsd-override.conf.j2`). `systemctl --user
+restart qemu-system@<vm>` works natively: after morph to
+`JOB_START`, `qemu-system@<vm>.service` starts and the QEMU process
+connects to virtiofsd@.socket, which socket-activates a fresh
+virtiofsd@.service. Equivalent shipped
+shape: `systemd-coredump@.service` uses
+`Requires=systemd-journald.socket` for the same restart-clean
+dependency relationship.
 
-Splitting the cycle into `systemctl stop` and a separate
-`systemctl start` makes each side a fresh transaction. The start-
-side transaction sees virtiofsd@ services in `inactive` state, queues
-`JOB_START` on each via `UNIT_ATOM_PULL_IN_START`, and the death-
-link evaluator skips them. This is the canonical systemd shape for
-"swap a unit definition and restart": stop, mutate, `daemon-reload`,
-start. Anything tighter than that races. See:
-`playbooks/roles/qemu_system_units/tasks/start_vms.yml`,
-`man systemd.unit` (`BindsTo=`),
-`man systemctl` (`restart`).
+### Tradeoff
+
+`Requires=` does not propagate when the dep stops *unexpectedly*
+(only on explicit stop). If `virtiofsd@<vm>-<tag>.service` crashes
+mid-run -- non-zero exit, panic, OOM-kill -- QEMU is no longer
+auto-stopped by systemd. The guest sees `virtio-fs: response too
+short` errors, hangs on the affected mount, and the operator
+notices via test failure or a stuck VM in `machinectl list`.
+Manual recovery: `systemctl --user stop qemu-system@<vm>` then
+`systemctl --user start qemu-system@<vm>`. virtiofsd crashes are
+rare; we have observed none in production.
+
+### Reverting to crash-kill
+
+To re-acquire `RETROACTIVE_STOP_ON_STOP` automatic propagation
+on virtiofsd failure, change the per-share line in
+`templates/qemu-system-override.conf.j2` back to
+`BindsTo=virtiofsd@%i-{{ share.tag }}.service`. That re-introduces
+the `JOB_RESTART` death-link race documented above, so operators
+must then revert to stop + `daemon-reload` + start for unit
+re-rendering and never use `systemctl restart` directly. systemd
+does not offer a primitive that combines both properties.
 
 ## Cloud-init
 

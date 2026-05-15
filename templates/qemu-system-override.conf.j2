@@ -12,7 +12,7 @@
 {% for share in shares | default([]) %}
 Requires=virtiofsd@%i-{{ share.tag }}.socket
 After=virtiofsd@%i-{{ share.tag }}.socket
-BindsTo=virtiofsd@%i-{{ share.tag }}.service
+Requires=virtiofsd@%i-{{ share.tag }}.service
 {% endfor %}
 {% endif %}
 {% for dev in pci_passthrough | default([]) %}

@@ -17,12 +17,13 @@
 # translate-uid maps file ownership to the guest).
 # Override VIRTIOFSD_SANDBOX_ARGS in the env file for --sandbox=none.
 #
-# This service is started by systemd socket activation when QEMU connects
-# to the virtiofsd socket. Do not start it directly; start the .socket
-# unit instead.
+# This service is started by systemd socket activation when the QEMU
+# process connects to the virtiofsd socket. Do not start it directly;
+# start the .socket unit instead.
 #
-# StopWhenUnneeded=yes makes the service auto-stop when no QEMU instance
-# pins it (via the per-VM drop-in's BindsTo=virtiofsd@%i-<tag>.service).
+# StopWhenUnneeded=yes makes the service auto-stop when no
+# qemu-system@<vm>.service pins it (via the per-VM drop-in's
+# Requires=virtiofsd@%i-<tag>.service).
 # Stop side mirrors the start side: socket activation handles start,
 # StopWhenUnneeded handles stop. See docs/design-decisions.md.
 

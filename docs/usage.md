@@ -77,10 +77,12 @@ minijinja-cli --trim-blocks \
 ```
 
 The per-instance drop-in adds `Before=qemu-system@<vm>.service` so
-virtiofsd outlives qemu's `ExecStop=` graceful shutdown. Without it
-the `BindsTo=virtiofsd@%i-<tag>.service` cascade in the qemu drop-in
-tears virtiofsd down concurrently with `ExecStop=`, the guest hangs
-on missing virtiofs responses, and qemu hits `TimeoutSec=` -> `SIGKILL`.
+virtiofsd outlives `qemu-system@<vm>.service`'s `ExecStop=` graceful
+shutdown. Without it the `Requires=virtiofsd@%i-<tag>.service`
+cascade in the `qemu-system-override.conf` drop-in tears virtiofsd
+down concurrently with `ExecStop=`, the guest hangs on missing
+virtiofs responses, and `qemu-system@<vm>.service` hits
+`TimeoutStopSec=` -> `SIGKILL`.
 See: design-decisions.md "virtiofsd" section.
 
 ## vfio
@@ -161,7 +163,7 @@ machinectl --user status test
 # Machine properties (parseable output)
 machinectl --user show test
 
-# Emergency kill (not graceful, kills QEMU immediately)
+# Emergency kill (not graceful, kills the QEMU process immediately)
 machinectl --user terminate test
 ```
 
@@ -325,11 +327,12 @@ systemctl --user daemon-reload
 
 Stop all VMs, remove all deployed units and configuration.
 
-`virtiofsd@<vm>-<tag>.service` instances auto-stop when no QEMU
-instance pins them (via `StopWhenUnneeded=yes` on `virtiofsd@.service`,
-pinned by the drop-in's `BindsTo=`). The listening sockets are not
-pinned by QEMU, so they keep socket-activating new virtiofsd
-processes until stopped explicitly:
+`virtiofsd@<vm>-<tag>.service` instances auto-stop when no
+`qemu-system@<vm>.service` pins them (via `StopWhenUnneeded=yes` on
+`virtiofsd@.service`, pinned by the drop-in's `Requires=`). The
+listening sockets are not pinned by `qemu-system@<vm>.service`, so
+they keep socket-activating new virtiofsd processes until stopped
+explicitly:
 
 ```shell
 systemctl --user stop machines.target
@@ -363,33 +366,33 @@ systemctl --user restart 'virtiofsd@*.socket'
 
 When `vm.env` or the per-VM drop-in
 (`qemu-system@<vm>.service.d/override.conf`) changes -- new
-kernel path, NVMe knobs, share list, anything -- reload the
-definition with stop, mutate, `daemon-reload`, start. **Do not**
-`systemctl restart` the VM service.
+kernel path, NVMe knobs, share list, anything -- re-render,
+`daemon-reload`, then `restart`:
 
 ```shell
-systemctl --user stop qemu-system@test
 # re-render override.conf and vm.env at this point
 systemctl --user daemon-reload
-systemctl --user start qemu-system@test
+systemctl --user restart qemu-system@test
 ```
 
-`systemctl restart` is `JOB_RESTART`, which patches itself
-in place after the stop phase and never re-runs transaction
-construction. The result is that the per-VM drop-in's
-`BindsTo=virtiofsd@%i-<tag>.service` deps are still considered
-already-resolved from when the OLD VM was running, but the OLD
-QEMU's exit drops the vhost-user sockets and the virtiofsd
-services self-exit, so by the time the patched-in start phase
-runs, those deps are `inactive`. The death-link evaluator on
-`UNIT_ACTIVE` sees them in `(inactive, no job)` state and
-queues `JOB_STOP` on the new VM, which then dies via
-`TimeoutStopSec=` two minutes later, mid-workload. Two
-separate transactions (`stop` + `start`) avoid this entirely:
-the start-side transaction queues `JOB_START` on every
-`BindsTo=` dep, the death-link evaluator skips deps with a
-queued job, no race. See: `docs/design-decisions.md`
-(`Restart cycle vs BindsTo race`).
+Native `systemctl restart` works because the
+`qemu-system-override.conf` drop-in uses
+`Requires=virtiofsd@%i-<tag>.service`, not `BindsTo=`. The
+former does not emit the `UNIT_ATOM_CANNOT_BE_ACTIVE_WITHOUT`
+death-link, so `JOB_RESTART`'s in-place morph to `JOB_START`
+(after the stop phase has dropped virtiofsd to `inactive` via
+vhost-user disconnect) is not aborted on the
+`qemu-system@<vm>.service` side. The service starts, the QEMU
+process connects to `virtiofsd@.socket`, and socket activation
+spawns a fresh virtiofsd. The tradeoff is loss of automatic
+crash-kill propagation when virtiofsd fails unexpectedly; see
+`docs/design-decisions.md` (`virtiofsd dependency`).
+
+If you switch the dep back to `BindsTo=` to re-acquire crash-kill,
+this workflow no longer holds: use stop + `daemon-reload` + start
+instead of `restart`. `BindsTo=` + `restart` races against the
+death-link and the QEMU process is `SIGKILL`'d after
+`TimeoutStopSec=` two minutes into start.
 
 ## Deploy all
 
