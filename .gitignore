@@ -5,6 +5,10 @@ vars/*
 # Rendered output
 *.env
 
+# Build artifacts and binary images
+images/
+*.iso
+
 # Editor swap files
 *.swp
 *.swo
