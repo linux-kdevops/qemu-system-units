@@ -80,8 +80,8 @@ suffixes. `vhost-user-fs-pci` has no non-transitional variant
 
 ### Zero-tool naming
 
-All rendered output references the consumer (qemu-system@ service),
-never the generator project. Config directories are named after the
+All rendered output references the consumer (the
+`qemu-system@.service` unit), never the generator project. Config directories are named after the
 service prefix (`qemu-system`, `virtiofsd`). Only the README and
 CLAUDE.md mention the project name.
 
