@@ -53,7 +53,7 @@ ExecStartPost=-varlinkctl call \
 ExecStop=-socat OPEN:%E/systemd/qemu-system/qmp-powerdown!!OPEN:/dev/null,wronly UNIX-CONNECT:%t/qemu-system/%i/qmp.sock
 KillSignal=SIGCONT
 KillMode=mixed
-TimeoutSec=2min
+TimeoutStopSec=2min
 Slice=machine.slice
 
 [Install]

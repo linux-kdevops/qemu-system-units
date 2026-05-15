@@ -93,7 +93,7 @@ guaranteed by their respective maintainers. See:
 `man systemd.unit`.
 
 **`KillMode=`** — Set to `mixed`. Sends `KillSignal=` to the main
-process. After the main process exits or `TimeoutSec=` elapses,
+process. After the main process exits or `TimeoutStopSec=` elapses,
 remaining processes in the cgroup receive `SIGKILL`. For VMs, the
 main process is QEMU. After `ExecStop=` runs QMP graceful shutdown,
 if QEMU exits cleanly, any leaked child processes are killed
@@ -101,7 +101,7 @@ immediately. The alternative `control-group` would send `KillSignal=`
 to all processes simultaneously, which is unnecessary when only QEMU
 needs the signal. See: `man systemd.kill`.
 
-**`TimeoutSec=`** — Set to `2min`. Grace period for `ExecStop=`
+**`TimeoutStopSec=`** — Set to `2min`. Grace period for `ExecStop=`
 before systemd sends `SIGKILL`. The systemd default
 (`DefaultTimeoutStopSec=`) is 90s. VMs need longer because ACPI
 powerdown triggers a full guest OS shutdown sequence (flushing
@@ -109,7 +109,7 @@ buffers, stopping services, unmounting filesystems). Override:
 
 ```yaml
 service:
-  TimeoutSec: 5min
+  TimeoutStopSec: 5min
 ```
 
 See: `man systemd.service`.
@@ -280,7 +280,7 @@ methods plus a guest-side notifier service over `AF_VSOCK`.
 `qemu_system_killed()` which sets `force_shutdown=true` and exits
 immediately without ACPI powerdown. `SIGCONT` is a no-op signal that
 keeps QEMU alive, giving `ExecStop=` time to send QMP
-system_powerdown for proper ACPI shutdown. After `TimeoutSec=`,
+system_powerdown for proper ACPI shutdown. After `TimeoutStopSec=`,
 systemd sends `SIGKILL` (via `KillMode=mixed`). Not
 user-configurable. See: `man systemd.kill`.
 
