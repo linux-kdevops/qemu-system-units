@@ -77,6 +77,11 @@ ExecStop=-socat OPEN:%E/systemd/qemu-system/qmp-powerdown!!OPEN:/dev/null,wronly
 {% endif %}
 {% if pci_passthrough is defined %}
 LimitMEMLOCK={{ ram + 256 }}M
+{# /dev/vfio/vfio is the fixed container path; the per-group
+   /dev/vfio/<iommu-group> nodes are runtime-numbered, so the
+   operator allow-lists them via service: or relaxes with
+   DevicePolicy=auto. See design-decisions.md "Security hardening". #}
+DeviceAllow=/dev/vfio/vfio rw
 {% endif %}
 {% for key, value in service | default({}) | items %}
 {{ key }}={{ value }}

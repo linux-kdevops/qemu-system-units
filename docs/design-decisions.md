@@ -172,6 +172,60 @@ from `systemctl status` showing the full `ExecStart=` line, and
 from QEMU's own self-identification in error messages
 (`qemu-system-x86_64: -drive file=...`). See: `man systemd.exec`.
 
+## Security hardening
+
+`qemu-system@.service` restricts device access with
+`DevicePolicy=closed` plus an explicit `DeviceAllow=` list. This
+mirrors `systemd-vmspawn@.service`, systemd's own VM unit, whose
+*entire* hardening block is exactly a closed device policy with an
+allow-list — no `ProtectSystem=`, `RestrictAddressFamilies=`,
+`SystemCallFilter=`, or the rest of the `systemd.exec` sandboxing
+set. systemd ships its VM unit that way deliberately, and the same
+reasoning applies here: a QEMU VM legitimately needs broad
+filesystem, syscall, and network access, so the device boundary is
+the hardening that fits without fighting the workload.
+
+The allow-list covers what the QEMU command line opens. `/dev/kvm`
+backs `-accel kvm`; `/dev/vhost-vsock` backs the
+`vhost-vsock-pci` device. `virtio-rng` reads `/dev/urandom`, which
+`DevicePolicy=closed` already permits as part of its default set
+(`/dev/null`, `/dev/zero`, `/dev/full`, `/dev/random`,
+`/dev/urandom`, `/dev/tty`, the pseudo-TTY nodes). The qemu-system
+templates use `-nic user` (userspace SLIRP) and emulated NVMe
+backed by image files, neither of which opens a device node, so
+nothing else is needed for the common case.
+
+### PCIe passthrough clashes with the closed policy
+
+A passthrough VM is the one case where the closed policy is not
+self-contained. `-device vfio-pci` opens `/dev/vfio/vfio` (the
+container, a fixed path the per-VM drop-in allow-lists) and one
+`/dev/vfio/<iommu-group>` node per assigned device — and the IOMMU
+group numbers are only known at runtime, so the template cannot
+render `DeviceAllow=` lines for them. The operator closes the gap
+either by allow-listing the specific group nodes
+(`service: { DeviceAllow: "/dev/vfio/42 rw" }`) or by opting that
+VM out of the closed policy (`service: { DevicePolicy: auto }`).
+This is documented rather than worked around because the group
+numbers are genuinely not render-time knowable.
+
+### Why not the `systemd.exec` sandboxing set
+
+Each `systemd.exec` directive omitted here was omitted because it
+conflicts with a QEMU feature, not by oversight. `PrivateDevices=yes`
+would hide `/dev/kvm`. `NoNewPrivileges=yes` breaks
+`qemu-bridge-helper`, which is SETUID — relevant if a deployment
+switches off `-nic user`. `MemoryDenyWriteExecute=yes` breaks the
+TCG JIT, so it is safe only under pure KVM. `SystemCallFilter=`
+can block KVM ioctls. `ProtectSystem=strict` needs
+`ReadWritePaths=` enumerated for the disk image, state, and
+runtime directories; `ProtectHome=` conflicts with a virtiofsd
+home share. An operator whose deployment is narrow enough to adopt
+any of these adds it through the `service` vars key, which accepts
+any `[Service]` directive. See: `man systemd.resource-control`,
+`man systemd.exec`, `man systemd-analyze` (the `security` verb),
+and `systemd-vmspawn@.service`.
+
 ## machined registration
 
 Each VM registers itself with machined at start-up via

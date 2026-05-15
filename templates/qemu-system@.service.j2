@@ -56,5 +56,16 @@ KillMode=mixed
 TimeoutStopSec=2min
 Slice=machine.slice
 
+# Device access restricted to what the QEMU command line opens,
+# mirroring systemd-vmspawn@.service. /dev/kvm backs -accel kvm;
+# /dev/vhost-vsock backs the vhost-vsock-pci device; virtio-rng's
+# /dev/urandom is permitted by the closed policy's defaults. PCIe
+# passthrough also needs /dev/vfio -- the per-VM drop-in adds it.
+# See: man systemd.resource-control, design-decisions.md
+# "Security hardening".
+DevicePolicy=closed
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/vhost-vsock rw
+
 [Install]
 WantedBy=machines.target
