@@ -1,7 +1,7 @@
 # qemu-system-units
 
-Systemd unit templates for running QEMU virtual machines as first-class
-systemd services.
+qemu-system-units (qsu) — systemd unit templates for running QEMU
+virtual machines as first-class systemd services.
 
 **License**: copyleft-next-0.3.1
 

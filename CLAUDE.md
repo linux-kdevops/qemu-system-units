@@ -2,9 +2,10 @@
 
 ## Project Overview
 
-Systemd unit templates for running QEMU virtual machines as first-class
-systemd services. Jinja2 templates rendered by `minijinja-cli` into
-systemd units and environment files. No daemon, no wrapper.
+qemu-system-units (qsu) — systemd unit templates for running QEMU
+virtual machines as first-class systemd services. Jinja2 templates
+rendered by `minijinja-cli` into systemd units and environment files.
+No daemon, no wrapper.
 
 **License**: copyleft-next-0.3.1
 
