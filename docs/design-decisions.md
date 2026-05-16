@@ -17,6 +17,15 @@ sensible default that the user can override. This document lists
 every such choice, the upstream reference that justifies it, and
 how to change it when possible.
 
+Source-code references with line numbers (`src/core/...`,
+`src/machine/...`, `src/libsystemd/...`) are verified against
+systemd `v260.1` (see `meson.version` in the systemd tree). Each
+cite was introduced by the commit that added the surrounding
+prose; this paragraph just records the version pin. Newer
+systemd releases may shift line numbers; the symbol names in
+each citation stay stable across recent releases, so grep
+upstream by symbol if the cited line no longer matches.
+
 ## Variable naming
 
 Variable names match upstream flag or parameter names when a 1:1
