@@ -87,6 +87,12 @@ shares:
 #     - file: images/nvme1.qcow2
 #       format: qcow2
 #       serial: data-drive
+#       # Persistent Memory Region (BAR 4/5).
+#       # pmem takes effect only with share: true.
+#       pmr:
+#         size: 16777216
+#         share: true
+#         # pmem: true
 #   subsystems:
 #     - nqn: subsys0
 #       controllers:

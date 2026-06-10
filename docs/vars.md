@@ -342,10 +342,43 @@ Drive backend properties (simple and explicit forms): `file`,
 
 Controller properties (maps to `-device nvme`): `serial`,
 `max_ioqpairs`, `msix_qsize`, `mdts`, `vsl`, `cmb_size_mb`,
-`ioeventfd`, `ocp`, `use-intel-id`, `dbcs`, `aerl`,
-`aer_max_queued`, `mqes`, `legacy-cmb`, `ctratt.mem`, `atomic.dn`,
+`legacy-cmb`, `pmr` (see below), `ioeventfd`, `ocp`, `use-intel-id`,
+`dbcs`, `aerl`, `aer_max_queued`, `mqes`, `ctratt.mem`, `atomic.dn`,
 `atomic.awun`, `atomic.awupf`, `zoned.zasl`, `zoned.auto_transition`,
 `opts`.
+
+**`nvme.drives[].pmr`** — Dict. Adds a Persistent Memory Region to that
+controller. Maps to a `-device nvme,pmrdev=<id>` link plus a
+`-object memory-backend-file` that the link names. The PMR occupies PCI
+BAR 4/5 (`hw/nvme/ctrl.c`). CMB and PMR can coexist on one controller.
+PMR is rejected by QEMU under SR-IOV and when MSI-X claims the
+exclusive BAR. `nvme.drives` controllers only (both the simple and
+the explicit-namespace form), not subsystem controllers. Omit the
+key for a controller with no PMR (backward compatible).
+
+`size`: backing region size in bytes. Required. Must be a power of 2;
+QEMU's NVMe code requires at least 16 bytes and the memory backend
+additionally rejects a size below one host page, so the practical
+minimum is one page (4096 bytes on x86_64). Maps to
+`-object memory-backend-file,size=`.
+
+`mem-path`: backing file path. Default: `nvme-pmr-<index>.img`, a bare
+filename that resolves against the unit `WorkingDirectory=`
+(`StateDirectory=`), so the region persists across restarts in the
+per-VM state directory. QEMU creates the file on first boot and reopens
+it afterwards. Maps to `-object memory-backend-file,mem-path=`.
+
+`share`: whether guest writes are written through to the backing file.
+Default: `true` (`share=on`, persistent). Set `false` for a volatile
+region (`share=off`). Maps to `-object memory-backend-file,share=`.
+
+`pmem`: real persistent-memory flush semantics for the backing file.
+Default: off. Only takes effect with `share` on — with `share` off QEMU
+maps the region `MAP_PRIVATE`, never requests `MAP_SYNC`, and silently
+ignores `pmem` (no error, no warning), so the template emits `pmem=on`
+only when `share` is also on. Maps to
+`-object memory-backend-file,pmem=`. See:
+`<qemu_binary> -object memory-backend-file,help`.
 
 BlockConf (simple form only, inherited by implicit namespace):
 `logical_block_size`, `physical_block_size`, `min_io_size`,
