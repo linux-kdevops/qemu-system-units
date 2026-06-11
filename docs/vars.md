@@ -95,12 +95,17 @@ List available types with `<qemu_binary> -machine help`. Required.
 **`iommu`** — IOMMU device type. Maps to `-device <iommu>`.
 
 `intel-iommu`: Intel VT-d. Requires `-machine q35`. Auto-sets
-`kernel-irqchip=split` on `-accel` (required for intremap). Adds
-`caching-mode=on` when `pci_passthrough` is defined.
+`kernel-irqchip=split` on `-accel` (required for intremap) and
+`caching-mode=on` so the guest's IOMMU page-table updates are
+trapped into QEMU's DMA path. That is needed both for VFIO
+passthrough and for a guest-side userspace driver (VFIO/SPDK/DPDK)
+that maps an emulated device for DMA; without it the guest IOMMU
+only does interrupt remapping and DPDK fails with "failed to select
+IOMMU type".
 
 `amd-iommu`: AMD-Vi. Requires `-machine q35`. Auto-sets
-`kernel-irqchip=split`. Adds `dma-remap=on` when `pci_passthrough`
-is defined.
+`kernel-irqchip=split` and `dma-remap=on` (same reason as
+intel-iommu's `caching-mode=on`).
 
 `virtio-iommu-pci`: virtio IOMMU. Works with `-machine q35`
 (x86_64) and `-machine virt` (aarch64). No kernel-irqchip
